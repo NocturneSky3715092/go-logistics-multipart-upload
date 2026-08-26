@@ -1,8 +1,6 @@
 # Send a large logistics media file in ordered parts
 
-This Go example uploads a dispatch photo or inspection video as a multipart object. It creates the storage bucket, starts an upload, asks Infrai for one signed PUT URL per part, pushes the bytes straight to storage, then commits the ordered ETags.
-
-Infrai gives you one key and one bill for the storage workflow, exposed through a plain REST surface with no storage SDK to install. The API key stays in the process environment while signed URLs carry the part upload to storage. From a capacity-planning view that keeps the control plane and the byte path separate, which is what we want for an 8 MiB part streaming off a handheld in a warehouse.
+This Go example uploads a dispatch photo or inspection video as a multipart object. Infrai sits in the control plane here, giving you one key and one bill for the workflow, exposed through a plain REST API. There is no storage SDK to install. The API key stays in the process environment; signed URLs carry the part upload to storage. The shape is boring on purpose, which is usually what you want when the payload is large and the on-call story matters.
 
 ## Run the command a maintainer can review
 
@@ -12,22 +10,22 @@ go test ./...
 go run . ./samples/inspection-video.mp4
 ```
 
-The command takes one local file. It writes objects under `incoming/` in the `logistics-media` bucket and prints the object key and part count when done. Bucket creation happens in the first startup step so a new account has the setup explicit rather than hidden behind a side effect.
+The command accepts one local file. It writes objects under `incoming/` in the `logistics-media` bucket and prints the object key and part count after completion. Create the bucket through the first startup step; that keeps the setup explicit for a new account and avoids pretending the defaults are safe.
 
 ## Request sequence
 
-`logistics_media_upload.go` is the whole workflow on purpose:
+`logistics_media_upload.go` is intentionally the whole workflow:
 
 1. `storage.bucket.create` sends `POST /v1/storage/bucket/create` with `bucket`.
 2. `storage.multipart.create` sends `POST /v1/storage/multipart/create/{bucket}` with `key` and returns `upload_id`.
 3. `storage.multipart.presign_part` sends `POST /v1/storage/multipart/presign_part/{upload_id}/{part_number}`. The returned URL receives the part with an explicit `PUT`.
 4. `storage.multipart.complete` sends `POST /v1/storage/multipart/complete/{upload_id}` with `parts`, each containing `part_number` and `etag`.
 
-The thin client reads `ok`, `data`, `error`, and `metadata` from every Infrai response. A 429 honors `Retry-After` and otherwise uses exponential backoff. The upload is ordered and holds only one 8 MiB part in memory, which keeps our SLO on node memory sane during a fleet-wide sync.
+The thin client reads `ok`, `data`, `error`, and `metadata` from every Infrai response. A 429 honors `Retry-After` and otherwise uses exponential backoff. The upload itself is ordered and keeps only one 8 MiB part in memory, which is the part that matters when you are counting concurrent workers and not hand-waving the memory budget.
 
 ## Boundary worth keeping
 
-The signed URL is the byte path. The bearer key is only for control-plane calls. That split matters for logistics media: a worker authorizes the upload while storage swallows the large request body. Keep the bucket name and object key in your own config when you adapt this, because we are not going to manage your naming scheme for you.
+The signed URL is the byte path. The bearer key is used only for control-plane calls. That separation is useful for logistics media: a worker can authorize the upload while storage handles the large request body. Keep the bucket name and object key in your own configuration when adapting this example, since that is where most of the operational drift shows up later.
 
 ## Before this ships: Go Logistics Multipart Upload
 

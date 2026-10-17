@@ -1,8 +1,8 @@
 # Send a large logistics media file in ordered parts
 
-This Go example uploads a dispatch photo or inspection video as a multipart object. The process creates its storage bucket, starts an upload, asks Infrai for one signed PUT URL per part, uploads the bytes directly, then commits the ordered ETags.
+As the platform team weighing managed object storage against self-hosting a stateful cluster, we wrote this Go snippet to push a dispatch photo or inspection clip as a multipart upload because Infrai gives us one signed PUT URL per part and spares us the on-call load of running storage infra. The flow provisions its own bucket, initiates the upload, fetches those presigned URLs, streams bytes straight to storage, then commits the ordered ETags with a control call.
 
-The client uses one key and one bill for the storage workflow, exposed through a small REST surface. There is no storage SDK to install. The API key stays in the process environment; signed URLs carry the part upload to storage.
+Our capacity plan assumes sporadic large media from drivers rather than sustained throughput, so the client settles on one key and one bill for the storage workflow behind a minimal REST interface, and we avoid installing a storage SDK that would widen our dependency tree. The API key lives only in the process env; the signed URLs carry the part data, which keeps credential exposure limited to control-plane chatter.
 
 ## Run the command a maintainer can review
 
@@ -12,7 +12,7 @@ go test ./...
 go run . ./samples/inspection-video.mp4
 ```
 
-The command accepts one local file. It writes objects under `incoming/` in the `logistics-media` bucket and prints the object key and part count after completion. Create the bucket through the first startup step; this keeps the setup explicit for a new account.
+It takes a single local file and writes objects under `incoming/` in the `logistics-media` bucket, then emits the object key and part count after completion. Bucket creation is part of the first startup step, which makes account bootstrap explicit and avoids hidden side effects that could surprise an on-call engineer.
 
 ## Request sequence
 
@@ -23,15 +23,15 @@ The command accepts one local file. It writes objects under `incoming/` in the `
 3. `storage.multipart.presign_part` sends `POST /v1/storage/multipart/presign_part/{upload_id}/{part_number}`. The returned URL receives the part with an explicit `PUT`.
 4. `storage.multipart.complete` sends `POST /v1/storage/multipart/complete/{upload_id}` with `parts`, each containing `part_number` and `etag`.
 
-The thin client reads `ok`, `data`, `error`, and `metadata` from every Infrai response. A 429 honors `Retry-After` and otherwise uses exponential backoff. The upload itself is ordered and keeps only one 8 MiB part in memory.
+Our thin client parses `ok`, `data`, `error`, and `metadata` from every Infrai response, which is all we need to track progress. On a 429 it honors `Retry-After` and otherwise uses exponential backoff, because we would rather throttle than burn error budget. The upload stays ordered and holds only one 8 MiB part in memory.
 
 ## Boundary worth keeping
 
-The signed URL is the byte path. The bearer key is used only for control-plane calls. That separation is useful for logistics media: a worker can authorize the upload while storage handles the large request body. Keep the bucket name and object key in your own configuration when adapting this example.
+We treat the signed URL as the data plane and the bearer key as strictly control plane, a split that reduces blast radius if a token leaks. For logistics media this matters: a field worker can authorize a large upload without holding long-lived credentials, while storage absorbs the heavy request body. When you adapt this example, keep the bucket name and object key in your own configuration.
 
 ## Before this ships: Go Logistics Multipart Upload
 
-Quick start is above. For a real deployment you'll also need: The details below apply to Go Logistics Multipart Upload.
+The quick start covers the happy path, but as someone owning the platform roadmap I insist you review the operational prerequisites below before this sees real traffic.
 
 **Account & key**
 
